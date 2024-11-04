@@ -1,7 +1,7 @@
 package:
   name: datadog-agent-nvml
   version: 1.0.9
-  epoch: 0
+  epoch: 1
   description: "Checks NVIDIA Management Library (NVML) exposed metrics through the Datadog Agent and can correlate them with the exposed Kubernetes devices"
   copyright:
     - license: Apache-2.0
@@ -88,6 +88,20 @@ pipeline:
 
       deactivate
 
+  - name: Create compatibility with the integration agent's subcommand
+    runs: |
+      # The agent integration subcommand needs the agent binary not to be a symlink to
+      # build the agent home directory as /opt/datadog-agent.
+      mkdir -p ${{targets.contextdir}}/opt/datadog-agent/bin/agent
+      cp /usr/bin/agent ${{targets.contextdir}}/opt/datadog-agent/bin/agent/agent
+
+      # The agent integration subcommand expects the python binaries path in the
+      # /opt/datadog-agent/embedded/bin directory.
+      mkdir -p ${{targets.contextdir}}/opt/datadog-agent/embedded/bin
+      ln -s /usr/bin/python3.11 ${{targets.contextdir}}/opt/datadog-agent/embedded/bin/python3.11
+      ln -s python3.11 ${{targets.contextdir}}/opt/datadog-agent/embedded/bin/python3
+      ln -s python3 ${{targets.contextdir}}/opt/datadog-agent/embedded/bin/python
+
 test:
   environment:
     contents:
@@ -96,8 +110,7 @@ test:
         - datadog-agent-core-integrations
         - datadog-agent-nvml=${{package.full-version}}
     environment:
-      PYTHONPATH: /usr/share/datadog-agent/lib/python${{vars.python_version}}/site-packages
-      PATH: /opt/datadog-agent/bin/agent/:/opt/datadog-agent/embedded/bin/:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      PYTHONPATH: "/usr/share/datadog-agent/lib/python${{vars.python_version}}/site-packages"
   pipeline:
     - runs: |
         stat /etc/datadog-agent/conf.d/nvml.d/conf.yaml.example
@@ -105,9 +118,7 @@ test:
         stat /usr/share/datadog-agent/lib/python${{vars.python_version}}/site-packages/datadog_nvml-${{package.version}}.dist-info/WHEEL
     - name: Verify the integration is installed # https://docs.datadoghq.com/agent/guide/integration-management/?tab=linux#install
       runs: |
-        cp /opt/datadog-agent/requirements-agent-release.txt ${{vars.dd_home}}/
-        cp /opt/datadog-agent/final_constraints-py3.txt ${{vars.dd_home}}/
-        mkdir -p /embedded/bin && ln -s $(which python3) ${{vars.dd_home}}/embedded/bin/python3
+        export PATH="/opt/datadog-agent/bin/agent/:/opt/datadog-agent/embedded/bin/:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         VERSION="$(agent integration show datadog-nvml | cut -d ':' -f2 | tr -d ' ')"
         test $VERSION = ${{package.version}}
 
