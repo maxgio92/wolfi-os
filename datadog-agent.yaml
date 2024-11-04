@@ -227,6 +227,59 @@ subpackages:
           mkdir -p ${{targets.contextdir}}/usr/bin/dist/jmx
           ln -sf /opt/datadog-agent/bin/agent/dist/jmx/jmxfetch.jar ${{targets.contextdir}}/usr/bin/dist/jmx/jmxfetch.jar
 
+  - name: datadog-agent-oci-extra-integrations-compat
+    dependencies:
+      runtime:
+        - bash
+        - coreutils
+        - datadog-agent-s6-overlay
+        - datadog-security-agent-policies
+    pipeline:
+      - runs: |
+          mkdir -p \
+            ${{targets.subpkgdir}}/conf.d \
+            ${{targets.subpkgdir}}/checks.d \
+            ${{targets.subpkgdir}}/opt/datadog-agent/bin/agent/dist \
+            ${{targets.subpkgdir}}/opt/datadog-agent/embedded/bin
+
+          # Several startup scripts assume binaries are located in /opt/datadog-agent/...
+          # Also, the agent integration subcommand needs the agent binary not to be a symlink to
+          # build the agent home directory as /opt/datadog-agent.
+          mv /usr/bin/agent ${{targets.subpkgdir}}/opt/datadog-agent/bin/agent/agent
+
+          ln -s agent ${{targets.subpkgdir}}/opt/datadog-agent/embedded/bin/system-probe
+          ln -s agent ${{targets.subpkgdir}}/opt/datadog-agent/embedded/bin/security-agent
+          ln -s agent ${{targets.subpkgdir}}/opt/datadog-agent/embedded/bin/process-agent
+          ln -s agent ${{targets.subpkgdir}}/opt/datadog-agent/embedded/bin/trace-agent
+
+          # The agent integration subcommand expects the python binaries path in the
+          # /opt/datadog-agent/embedded/bin directory.
+          ln -s /usr/bin/python3.11 ${{targets.subpkgdir}}/opt/datadog-agent/embedded/bin/python3.11
+          ln -s python3.11 ${{targets.subpkgdir}}/opt/datadog-agent/embedded/bin/python3
+          ln -s python3 ${{targets.subpkgdir}}/opt/datadog-agent/embedded/bin/python
+
+          cp -r /opt/datadog-agent/embedded/share ${{targets.subpkgdir}}/opt/datadog-agent/embedded/share
+
+          cp -r bin/agent/dist/checks ${{targets.subpkgdir}}/opt/datadog-agent/bin/agent/dist/
+          install -Dm644 bin/agent/dist/config.py ${{targets.subpkgdir}}/opt/datadog-agent/bin/agent/dist/config.py
+          cp -r bin/agent/dist/utils ${{targets.subpkgdir}}/opt/datadog-agent/bin/agent/dist/
+          cp -r bin/agent/dist/views ${{targets.subpkgdir}}/opt/datadog-agent/bin/agent/dist/
+
+          cp -r Dockerfiles/agent/entrypoint.d ${{targets.subpkgdir}}/opt/entrypoints
+    test:
+      environment:
+        contents:
+          packages:
+            - datadog-agent=${{package.full-version}}
+            - datadog-agent-core-integrations=${{package.full-version}}
+            - datadog-agent-oci-extra-integrations-compat=${{package.full-version}}
+        environment:
+          PYTHONPATH: /usr/share/datadog-agent/lib/python3.11/site-packages
+          PATH: /opt/datadog-agent/bin/agent/:/opt/datadog-agent/embedded/bin/:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      pipeline:
+        - runs: |
+            agent integrations freeze
+
   - name: datadog-agent-oci-compat
     dependencies:
       runtime:
