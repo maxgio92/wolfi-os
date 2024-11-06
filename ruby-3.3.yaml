@@ -60,25 +60,15 @@ pipeline:
          --build=${{host.triplet.gnu}} \
          --target=${{host.triplet.gnu}} \
          --prefix=${{vars.prefix}} \
-         --enable-ipv6 \
-         --enable-loadable-sqlite-extensions \
-         --enable-optimizations \
          --enable-shared \
-         --without-lto \
-         --with-computed-gotos \
-         --with-dbmliborder=gdbm:ndbm \
-         --with-system-expat \
-         --with-system-ffi \
-         --with-system-libmpdec \
-         --without-ensurepip \
-         --enable-yjit
+         --enable-yjit \
+         --disable-install-doc
 
   - uses: autoconf/make
 
   - uses: autoconf/make-install
 
   - uses: strip
-
   - runs: |
       # Ignore the patch version of ruby since ruby will install under the
       # version of the latest standard library. Should produce the string 3.3.*
@@ -92,18 +82,18 @@ pipeline:
       rm -rf ${GEMDIR}/gems/bundler-*
       rm ${GEMDIR}/specifications/default/bundler-*.gemspec
 
-      rm ${{targets.destdir}}/usr/bin/bundle \
-         ${{targets.destdir}}/usr/bin/bundler
+      rm ${{targets.destdir}}${{vars.prefix}}/bin/bundle \
+         ${{targets.destdir}}${{vars.prefix}}/bin/bundler
 
 subpackages:
-  - name: "ruby-3.3-doc"
-    description: "ruby documentation"
-    pipeline:
-      - uses: split/manpages
-      - runs: |
-          mkdir -p "${{targets.subpkgdir}}"/usr/share
-          mv "${{targets.destdir}}"/usr/share/doc "${{targets.subpkgdir}}"/usr/share/
-          mv "${{targets.destdir}}"/usr/share/ri "${{targets.subpkgdir}}"/usr/share/
+  #- name: "ruby-3.3-doc"
+  #  description: "ruby documentation"
+  #  pipeline:
+  #    - uses: split/manpages
+  #    - runs: |
+  #        mkdir -p "${{targets.subpkgdir}}"${{vars.prefix}}/share
+  #        mv "${{targets.destdir}}"${{vars.prefix}}/share/doc "${{targets.subpkgdir}}"${{vars.prefix}}/share/
+  #        mv "${{targets.destdir}}"${{vars.prefix}}/share/ri "${{targets.subpkgdir}}"${{vars.prefix}}/share/
 
   - name: "ruby-3.3-dev"
     description: "ruby development headers"
@@ -149,3 +139,4 @@ test:
         ri --version
         ri --help
         ruby --help
+        ruby -r debug -e 'puts "Debug gem is working!"'
