@@ -62,7 +62,7 @@ pipeline:
          --prefix=${{vars.prefix}} \
          --enable-shared \
          --enable-yjit \
-         --disable-install-doc
+         --disable-install-rdoc
 
   - uses: autoconf/make
 
