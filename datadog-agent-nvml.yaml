@@ -1,7 +1,7 @@
 package:
   name: datadog-agent-nvml
   version: 1.0.9
-  epoch: 2
+  epoch: 3
   description: "Checks NVIDIA Management Library (NVML) exposed metrics through the Datadog Agent and can correlate them with the exposed Kubernetes devices"
   copyright:
     - license: Apache-2.0
@@ -30,9 +30,9 @@ pipeline:
   # This integration wheel comes from the integrations-extras repository
   - uses: git-checkout
     with:
-      repository: https://github.com/DataDog/integrations-extras
-      tag: nvml-${{package.version}}
-      expected-commit: d38c5cdb4ab4d07f4432afb25e0ccd70341efb51
+      repository: https://github.com/maxgio92/datadog-integrations-extras
+      tag: nvml-1.0.10-rc2
+      expected-commit: b721d010a4a7acd013f4c0f593f47256497ea97f
 
   - runs: |
       # Create and activate a virtual environment.
