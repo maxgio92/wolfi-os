@@ -17,6 +17,8 @@ package:
       - libnfnetlink
 
 environment:
+  environment:
+    RUSTFLAGS: "-C instrument-coverage" # https://doc.rust-lang.org/rustc/instrument-coverage.html#compiling-with-coverage-enabled
   contents:
     packages:
       - build-base
@@ -70,6 +72,11 @@ update:
     use-tag: true
 
 test:
+  environment:
+    contents:
+      packages:
+        - clang
+        - rust
   pipeline:
     - name: Version information tests
       runs: |
@@ -84,3 +91,9 @@ test:
         ztunnel help | grep "Commands:"
         ztunnel help proxy | grep "Start the ztunnel proxy"
         ztunnel help version | grep "Print the version"
+    # https://doc.rust-lang.org/rustc/instrument-coverage.html#running-the-instrumented-binary-to-generate-raw-coverage-profiling-data
+    - name: Merge profiling data and report coverage
+      runs: |
+        llvm-profdata merge --sparse default_*.profraw -o default.profdata
+        echo -n "apkover: "
+        llvm-cov report --ignore-filename-regex='/.cargo/registry' --instr-profile=default.profdata --object "/$(apk info -L ${{package.name}} 2>/dev/null | grep 'bin\/')" --summary-only 2>/dev/null | tail -1 | awk '{print $7}'
