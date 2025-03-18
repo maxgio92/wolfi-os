@@ -1,0 +1,271 @@
+package:
+  name: dogstatsd
+  # This package has two git checkouts. For each new release, the commit SHA for
+  # DataDog/integrations-core must also be updated.
+  version: "7.63.3"
+  epoch: 3
+  copyright:
+    - license: Apache-2.0
+  dependencies:
+    runtime:
+      - blkid
+      - datadog-agent-core-integrations
+      - findutils
+      - grep
+      - libpcap
+      - libseccomp
+      - shadow
+
+capabilities:
+  add: []
+
+vars:
+  py-version: "3.12"
+  destd: /opt/datadog-agent
+
+var-transforms:
+  - from: ${{package.version}}
+    match: ^(\d+\.\d+)\.\d+$
+    # this is used in the datadog-agent-core-integrations sub package git checkout as there will not always be a
+    # corresponding tag of the same name as the origin package version. There does however appear to be a pattern of
+    # maintaining the same major.minor.x branch for the integrations-core repo. This was first observed with the
+    # 7.58.1 tag/release of the datadog-agent package.
+    # Upstream bug https://github.com/DataDog/integrations-core/issues/18955 created seeking clarification on why there
+    # appears to be a missing tag in DataDog/integrations-core. Until that is resolved
+    # or until the next release we can use the 7.58.x branch of the DataDog/integrations-core repo
+    replace: "$1.x"
+    to: datadog-major-minor-x
+
+environment:
+  contents:
+    packages:
+      - bison
+      - build-base
+      - busybox
+      - ca-certificates-bundle
+      # NOTE: Package requires clang-12, which it downloads from a known source
+      # during the build process. Currently its not simple to replace this with
+      # a modern clang, but leaving this commented out in case this changes in
+      # the future.
+      # - clang-16
+      # - clang-16-dev
+      - cmake
+      - coreutils
+      - dpkg
+      - elfutils-dev
+      - findutils
+      - flex
+      # https://github.com/DataDog/datadog-agent/blob/95f4d66f5fb0c10940e0f9b8fc2ab33f0c6099f0/omnibus/config/software/datadog-agent-integrations-py3-dependencies.rb
+      - freetds-dev
+      # - gstatus # TODO: Required by gluster
+      - gcc-12
+      - gnutar
+      - go
+      - krb5-dev
+      - libbpf-dev
+      - libedit-dev
+      - libpcap-dev
+      - libzip
+      - linux-headers
+      - ninja
+      - procps-dev
+      - py${{vars.py-version}}-build-base-dev
+      - py${{vars.py-version}}-semver
+      - systemd-dev
+      - util-linux-misc # unshare
+      - wget # Required for downloading clang-12 and kernel headers from debian
+  environment:
+    # CGo allows Go programs to call C code
+    CGO_ENABLED: "1"
+    # -Os optimizes the code for size and add the directory to rtlinkers includes
+    CGO_CFLAGS: "-Os -I/usr/include/"
+    # Pass options to the linker.
+    CGO_LDFLAGS: "-L/usr/lib/"
+    # disables generation of debugging information
+    GOFLAGS: "-ldflags=-w"
+    # The version of linux-headers to fetch kernel headers for
+    LINUX_HEADERS_VERSION: "5.10.0-0.deb10.29"
+    # The version of linux to fetch kernel headers for
+    LINUX_KERNEL_VERSION: "5.10.216-1~deb10u1"
+
+pipeline:
+  - uses: git-checkout
+    with:
+      repository: https://github.com/DataDog/datadog-agent
+      tag: ${{package.version}}
+      expected-commit: eab078f2e713852de8e4f4c168ea009065841903
+
+  # Recent commit to the init.go code changed some of the logic of Python path resolving
+  # for the embedded Python, causing issues. Let's revert the commit to return to the previous
+  # behavior. This change was introduced for MacOS use-cases, so not relevant to Linux.
+  # https://github.com/DataDog/datadog-agent/pull/31426
+  - uses: patch
+    with:
+      patches: revert-import-python-relatively-instead-of-using-the-patch.patch remove-removed-godebug.patch
+
+  # Install `invoke` (build) dependencies. We ultimately package with venv so
+  # these won't leak into the package.
+  - runs: |
+      # install `invoke` and its dependencies
+      python${{vars.py-version}} -m pip install invoke requests toml pyyaml packaging
+
+      # install `gitlab`
+      python${{vars.py-version}} -m pip install python-gitlab
+
+  - uses: go/bump
+    with:
+      deps: |-
+        golang.org/x/oauth2@v0.27.0
+        golang.org/x/net@v0.36.0
+      replaces: github.com/mholt/archiver/v3=github.com/anchore/archiver/v3@v3.5.2
+      show-diff: true
+
+  - uses: go/bump
+    with:
+      modroot: pkg/trace
+      # Requires +incompatible or it'll throw an error
+      deps: |-
+        github.com/docker/distribution@v2.8.3+incompatible
+        golang.org/x/crypto@v0.35.0
+      show-diff: true
+
+  - name: Ensure Go dependencies
+    runs: |
+      export PATH=$PATH:$GOPATH/bin
+      mkdir -p "$GOPATH/src/github.com/DataDog/"
+      ln -sf /home/build/ "$GOPATH"/src/github.com/DataDog/datadog-agent
+      go mod tidy
+
+      invoke -e deps
+
+  - name: Build dogstatds
+    runs: |
+      invoke -e dogstatsd.build
+
+  #- name: Install the agent and its components
+  #  runs: |
+  #    mkdir -p \
+  #      ${{targets.contextdir}}${{vars.destd}}/bin/agent \
+  #      ${{targets.contextdir}}${{vars.destd}}/embedded/bin
+
+  #    install -Dm755 bin/agent/agent ${{targets.contextdir}}${{vars.destd}}/bin/agent
+  #    # *-agent is just a symlink to the "agent" multicall
+  #    ln -s ${{vars.destd}}/bin/agent/agent ${{targets.contextdir}}${{vars.destd}}/embedded/bin/process-agent
+  #    ln -s ${{vars.destd}}/bin/agent/agent ${{targets.contextdir}}${{vars.destd}}/embedded/bin/security-agent
+  #    ln -s ${{vars.destd}}/bin/agent/agent ${{targets.contextdir}}${{vars.destd}}/embedded/bin/trace-agent
+  #    ln -s ${{vars.destd}}/bin/agent/agent ${{targets.contextdir}}${{vars.destd}}/embedded/bin/system-probe
+
+  #    mkdir -p ${{targets.contextdir}}/etc/datadog-agent/
+
+  #    cp -r Dockerfiles/agent/s6-services ${{targets.contextdir}}/etc/services.d
+  #    cp -r Dockerfiles/agent/cont-init.d ${{targets.contextdir}}/etc/cont-init.d
+
+  #    install -Dm644 Dockerfiles/agent/datadog-docker.yaml ${{targets.contextdir}}/etc/datadog-agent/datadog-docker.yaml
+  #    install -Dm644 Dockerfiles/agent/datadog-ecs.yaml ${{targets.contextdir}}/etc/datadog-agent/datadog-ecs.yaml
+  #    install -Dm644 bin/agent/dist/datadog.yaml ${{targets.contextdir}}/etc/datadog-agent/datadog.yaml.example
+  #    install -Dm644 bin/agent/dist/system-probe.yaml ${{targets.contextdir}}/etc/datadog-agent/system-probe.yaml.example
+  #    install -Dm644 bin/agent/dist/security-agent.yaml ${{targets.contextdir}}/etc/datadog-agent/security-agent.yaml.example
+
+  #    install -Dm755 Dockerfiles/agent/entrypoint.sh ${{targets.contextdir}}/usr/bin/entrypoint.sh
+  #    install -Dm755 Dockerfiles/agent/probe.sh ${{targets.contextdir}}/probe.sh
+  #    install -Dm755 Dockerfiles/agent/initlog.sh ${{targets.contextdir}}/initlog.sh
+  #    install -Dm755 Dockerfiles/agent/secrets-helper/readsecret.py ${{targets.contextdir}}/readsecret.py
+  #    install -Dm755 Dockerfiles/agent/secrets-helper/readsecret.sh ${{targets.contextdir}}/readsecret.sh
+  #    install -Dm755 Dockerfiles/agent/secrets-helper/readsecret_multiple_providers.sh ${{targets.contextdir}}/readsecret_multiple_providers.sh
+
+  #    # confd used for easy reuse below
+  #    confd=${{targets.contextdir}}/etc/datadog-agent/conf.d
+  #    cp -r bin/agent/dist/conf.d "$confd"
+
+  #    # https://github.com/NixOS/nixpkgs/pull/189795
+  #    # the agent apparently loads .yaml.default files, which then cause noise in logs.
+  #    rm -rf \
+  #        "$confd/apm.yaml.default" \
+  #        "$confd/process_agent.yaml.default" \
+  #        "$confd/winproc.d"
+
+  #    # Setup s3-overlay overrides
+  #    mkdir -p ${{targets.contextdir}}/etc/s6/init
+  #    cp -r Dockerfiles/agent/init-stage3 ${{targets.contextdir}}/etc/s6/init/init-stage3
+  #    cp Dockerfiles/agent/init-stage3-host-pid ${{targets.contextdir}}/etc/s6/init/init-stage3-host-pid
+
+  #    # Needed by the system-probe and runtime security agent sockets.
+  #    # The default system-probe socket path is /opt/datadog-agent/run/sysprobe.sock
+  #    # The default runtime security agent socket path is /opt/datadog-agent/run/runtime-security.sock
+  #    mkdir ${{targets.contextdir}}${{vars.destd}}/run
+
+  #- uses: strip
+
+update:
+  enabled: true
+  github:
+    identifier: DataDog/datadog-agent
+  ignore-regex-patterns:
+    - "lambda-extension.*"
+
+test:
+  environment:
+    contents:
+      packages:
+        - datadog-agent=${{package.full-version}}
+        - datadog-agent-fakeintake=${{package.full-version}}
+        - datadog-agent-core-integrations=${{package.full-version}}
+    environment:
+      # cannot use vars.destd here. https://github.com/chainguard-dev/melange/issues/1402
+      # setting PATH here has no effect.
+      mypath: /opt/datadog-agent/bin/agent:/opt/datadog-agent/embedded/bin
+  pipeline:
+    - runs: exit 1
+    #- name: Ensure the agent's requirements.txt for integrations is included
+    #  runs: |
+    #    PATH=$mypath:$PATH
+    #    ls ${{vars.destd}}/requirements-agent-release.txt
+    #- name: Ensure the agent integration subcommand works
+    #  runs: |
+    #    PATH=$mypath:$PATH
+    #    agent integration freeze >/dev/null
+    #- name: Ensure checks can be loaded (base)
+    #  uses: python/import
+    #  with:
+    #    python: ${{vars.destd}}/embedded/bin/python${{vars.py-version}}
+    #    import: datadog_checks.base
+    #- name: Ensure checks can be loaded (downloader)
+    #  uses: python/import
+    #  with:
+    #    python: ${{vars.destd}}/embedded/bin/python${{vars.py-version}}
+    #    import: datadog_checks.downloader
+    #- name: Execute bins
+    #  runs: |
+    #    PATH=$mypath:$PATH
+    #    process-agent --version
+    #    process-agent --help
+    #    security-agent --help
+    #    system-probe --help
+    #    trace-agent --version
+    #    trace-agent --help
+
+    #    agent version
+    #    agent --help
+    #- name: Ensure agent can be started
+    #  runs: |
+    #    PATH=$mypath:$PATH
+    #    cat > /etc/datadog-agent/datadog.yaml <<EOF
+    #    api_key: "test"
+    #    dd_url: "http://localhost:80"
+    #    hostname: "$(hostname)"
+    #    EOF
+
+    #    export DD_LOG_LEVEL=debug
+    #    export DD_HOSTNAME_FILE=/etc/hostname
+    #    agent check uptime
+    #    agent check disk
+    #- name: Validate multicall components are correctly linked
+    #  runs: |
+    #    PATH=$mypath:$PATH
+    #    trace-agent version | grep trace-agent
+    #    security-agent version | grep "Security agent"
+    #    process-agent version | grep Agent
+    #    system-probe version | grep "System Probe"
+    #- uses: test/ldd-check
+    #  with:
+    #    packages: ${{package.name}}
